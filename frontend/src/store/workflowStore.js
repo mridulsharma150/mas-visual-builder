@@ -8,6 +8,7 @@ export const useWorkflowStore = create((set, get) => ({
   nodes: [],
   edges: [],
   selectedNode: null,
+  canvasSyncKey: 0,
 
   // Workflow meta
   workflowName: 'Untitled Workflow',
@@ -67,12 +68,70 @@ export const useWorkflowStore = create((set, get) => ({
 
   // ── Topology template ────────────────────────────────────────────────────
   applyTopologyTemplate: (template) => {
-    const { predefinedAgents } = get()
+    const { nodes, predefinedAgents } = get()
+
+    // ── CUSTOM: clear all edges, let user draw ──────────────────────────
+    if (template.id === 'custom') {
+      set({ topology: 'custom', edges: [] })
+      return
+    }
+
+    // ── CANVAS HAS NODES: rewire edges using topology pattern ───────────
+    if (nodes.length > 0) {
+      const n = nodes.length
+      const newEdges = []
+
+      const makeEdge = (srcNode, tgtNode, idx) => ({
+        id: `topo-${template.id}-${idx}-${Date.now()}`,
+        source: srcNode.id,
+        target: tgtNode.id,
+        animated: true,
+        style: { stroke: '#6366f1', strokeWidth: 2 },
+      })
+
+      if (template.id === 'hierarchical' || template.id === 'star') {
+        // Node 0 is hub → connects to all others
+        for (let i = 1; i < n; i++) {
+          newEdges.push(makeEdge(nodes[0], nodes[i], i))
+        }
+        // Star also has all others → hub
+        if (template.id === 'star') {
+          for (let i = 1; i < n; i++) {
+            newEdges.push(makeEdge(nodes[i], nodes[0], n + i))
+          }
+        }
+      } else if (template.id === 'sequential') {
+        // Chain: 0 → 1 → 2 → … → n-1
+        for (let i = 0; i < n - 1; i++) {
+          newEdges.push(makeEdge(nodes[i], nodes[i + 1], i))
+        }
+      } else if (template.id === 'peer_to_peer') {
+        // Full mesh: every node → every other node
+        let idx = 0
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < n; j++) {
+            if (i !== j) {
+              newEdges.push(makeEdge(nodes[i], nodes[j], idx++))
+            }
+          }
+        }
+      } else {
+        // Fallback for any unknown topology: sequential chain
+        for (let i = 0; i < n - 1; i++) {
+          newEdges.push(makeEdge(nodes[i], nodes[i + 1], i))
+        }
+      }
+
+      set({ topology: template.id, edges: [...newEdges] })
+      return
+    }
+
+    // ── EMPTY CANVAS: load template default agents + edges ──────────────
     const cols = 3
     const xSpacing = 230
     const ySpacing = 190
 
-    const nodes = template.default_agents.map((role, i) => {
+    const newNodes = template.default_agents.map((role, i) => {
       const meta = predefinedAgents.find((a) => a.role === role) || {}
       return {
         id: `${role}-${i}`,
@@ -95,7 +154,7 @@ export const useWorkflowStore = create((set, get) => ({
       }
     })
 
-    const edges = template.edges.map((e, i) => {
+    const newEdges = template.edges.map((e, i) => {
       const srcIdx = template.default_agents.indexOf(e.source)
       const tgtIdx = template.default_agents.indexOf(e.target)
       return {
@@ -107,7 +166,7 @@ export const useWorkflowStore = create((set, get) => ({
       }
     })
 
-    set({ nodes, edges, topology: template.id })
+    set({ nodes: [...newNodes], edges: [...newEdges], topology: template.id })
   },
 
   // ── Add agent from palette ───────────────────────────────────────────────
@@ -125,15 +184,16 @@ export const useWorkflowStore = create((set, get) => ({
       data: {
         role: agentMeta.role,
         label: agentMeta.label,
-        color: agentMeta.color,
-        icon: agentMeta.icon,
-        model: agentMeta.default_model,
-        strategy: agentMeta.default_strategy,
-        tools: [...agentMeta.default_tools],
-        system_prompt: agentMeta.default_prompt,
+        color: agentMeta.color || '#6366f1',
+        icon: agentMeta.icon || '🤖',
+        model: agentMeta.default_model || 'mock',
+        strategy: agentMeta.default_strategy || 'ReAct',
+        tools: [...(agentMeta.default_tools || [])],
+        system_prompt: agentMeta.default_prompt || '',
         max_iterations: 5,
       },
     }
+    // Spread into a new array so the reference changes → useEffect in canvas fires
     set({ nodes: [...nodes, newNode] })
   },
 

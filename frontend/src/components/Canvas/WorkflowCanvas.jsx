@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -15,17 +15,66 @@ import AgentNode from './AgentNode'
 const nodeTypes = { agentNode: AgentNode }
 
 export default function WorkflowCanvas() {
-  const { nodes: storeNodes, edges: storeEdges, setNodes, setEdges, setSelectedNode } =
-    useWorkflowStore()
+  const { setNodes, setEdges, setSelectedNode } = useWorkflowStore()
 
-  const [nodes, setLocalNodes, onNodesChange] = useNodesState(storeNodes)
-  const [edges, setLocalEdges, onEdgesChange] = useEdgesState(storeEdges)
+  // Subscribe to store nodes/edges as refs — so we can react to them
+  // without causing infinite re-render loops
+  const storeNodes = useWorkflowStore((s) => s.nodes)
+  const storeEdges = useWorkflowStore((s) => s.edges)
 
-  // Sync store -> local when topology template is applied
+  const [nodes, setLocalNodes, onNodesChange] = useNodesState([])
+  const [edges, setLocalEdges, onEdgesChange] = useEdgesState([])
+
+  // Track previous store arrays by reference so we only sync
+  // when the store intentionally sets a new array (addAgent / topology switch)
+  // — NOT when the store is updated from the canvas itself (drag, etc.)
+  const prevStoreNodes = useRef(storeNodes)
+  const prevStoreEdges = useRef(storeEdges)
+  const isSyncingToStore = useRef(false)
+
   useEffect(() => {
-    setLocalNodes(storeNodes)
-    setLocalEdges(storeEdges)
+    // Skip if this change was caused by us pushing canvas → store
+    if (isSyncingToStore.current) return
+
+    if (storeNodes !== prevStoreNodes.current) {
+      prevStoreNodes.current = storeNodes
+      setLocalNodes(storeNodes)
+    }
+    if (storeEdges !== prevStoreEdges.current) {
+      prevStoreEdges.current = storeEdges
+      setLocalEdges(storeEdges)
+    }
   }, [storeNodes, storeEdges])
+
+  // Sync canvas drag/delete → store without triggering the effect above
+  const handleNodesChange = useCallback(
+    (changes) => {
+      onNodesChange(changes)
+      isSyncingToStore.current = true
+      setLocalNodes((nds) => {
+        setNodes(nds)
+        prevStoreNodes.current = nds  // keep ref in sync
+        return nds
+      })
+      // reset flag after React finishes this render cycle
+      requestAnimationFrame(() => { isSyncingToStore.current = false })
+    },
+    [onNodesChange, setLocalNodes, setNodes]
+  )
+
+  const handleEdgesChange = useCallback(
+    (changes) => {
+      onEdgesChange(changes)
+      isSyncingToStore.current = true
+      setLocalEdges((eds) => {
+        setEdges(eds)
+        prevStoreEdges.current = eds
+        return eds
+      })
+      requestAnimationFrame(() => { isSyncingToStore.current = false })
+    },
+    [onEdgesChange, setLocalEdges, setEdges]
+  )
 
   const onConnect = useCallback(
     (params) => {
@@ -37,20 +86,15 @@ export default function WorkflowCanvas() {
       setLocalEdges((eds) => {
         const updated = addEdge(newEdge, eds)
         setEdges(updated)
+        prevStoreEdges.current = updated
         return updated
       })
     },
-    []
+    [setLocalEdges, setEdges]
   )
 
-  const handleNodesChange = (changes) => {
-    onNodesChange(changes)
-    setNodes(nodes)
-  }
-
-  const onNodeClick = (_, node) => setSelectedNode(node)
-
-  const onPaneClick = () => setSelectedNode(null)
+  const onNodeClick = useCallback((_, node) => setSelectedNode(node), [setSelectedNode])
+  const onPaneClick = useCallback(() => setSelectedNode(null), [setSelectedNode])
 
   return (
     <div className="flex-1 h-full">
@@ -58,7 +102,7 @@ export default function WorkflowCanvas() {
         nodes={nodes}
         edges={edges}
         onNodesChange={handleNodesChange}
-        onEdgesChange={onEdgesChange}
+        onEdgesChange={handleEdgesChange}
         onConnect={onConnect}
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
