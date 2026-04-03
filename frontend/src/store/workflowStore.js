@@ -8,6 +8,7 @@ export const useWorkflowStore = create((set, get) => ({
   nodes: [],
   edges: [],
   selectedNode: null,
+  selectedEdge: null,
   canvasSyncKey: 0,
 
   // Workflow meta
@@ -29,11 +30,99 @@ export const useWorkflowStore = create((set, get) => ({
   // Experiment history
   experiments: [],
 
+  // Message threads per node — { [nodeId]: [{ role, text, ts, fromNodeId? }] }
+  agentMessages: {},
+
   // ── Canvas actions ──────────────────────────────────────────────────────
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
 
+  setWorkflowName: (name) => set({ workflowName: name }),
+
   setSelectedNode: (node) => set({ selectedNode: node }),
+
+  setSelectedEdge: (edge) => set({ selectedEdge: edge }),
+
+  // Post a message into a node's thread
+  // role: 'user' | 'agent'  fromNodeId: optional source agent node id
+  sendMessageToAgent: (nodeId, message) =>
+    set((state) => ({
+      agentMessages: {
+        ...state.agentMessages,
+        [nodeId]: [...(state.agentMessages[nodeId] || []), message],
+      },
+    })),
+
+  // Simulate agent-to-agent message delivery along an edge
+  // Called when user sends a message — it also echoes to the target node
+  // of any outgoing directional/feedback/bidirectional edge from that node
+  deliverAgentFeedback: (sourceNodeId, text) => {
+    const { edges, nodes, agentMessages } = get()
+    const ts = Date.now()
+
+    // Find outgoing edges from this node
+    const outgoing = edges.filter((e) => e.source === sourceNodeId)
+    const updates = { ...agentMessages }
+
+    // Also deliver to source (the sent message)
+    updates[sourceNodeId] = [
+      ...(updates[sourceNodeId] || []),
+      { role: 'user', text, ts },
+    ]
+
+    outgoing.forEach((edge) => {
+      const targetNode = nodes.find((n) => n.id === edge.target)
+      if (!targetNode) return
+      const senderNode = nodes.find((n) => n.id === sourceNodeId)
+      updates[edge.target] = [
+        ...(updates[edge.target] || []),
+        {
+          role: 'agent',
+          text: `[${senderNode?.data?.label || 'Agent'} → ${edge.type || 'directional'}]: ${text}`,
+          ts: ts + 1,
+          fromNodeId: sourceNodeId,
+          edgeType: edge.type,
+        },
+      ]
+    })
+
+    // bidirectional — also deliver in reverse (target → source)
+    const incoming = edges.filter(
+      (e) => e.target === sourceNodeId && e.type === 'bidirectional'
+    )
+    incoming.forEach((edge) => {
+      const senderNode = nodes.find((n) => n.id === edge.source)
+      updates[edge.source] = [
+        ...(updates[edge.source] || []),
+        {
+          role: 'agent',
+          text: `[${nodes.find((n) => n.id === sourceNodeId)?.data?.label || 'Agent'} → bidirectional]: ${text}`,
+          ts: ts + 2,
+          fromNodeId: sourceNodeId,
+          edgeType: 'bidirectional',
+        },
+      ]
+    })
+
+    set({ agentMessages: updates })
+  },
+
+  // Change the type of an existing edge
+  setEdgeType: (edgeId, newType) => {
+    const meta = {
+      directional:   { animated: true },
+      feedback:      { animated: true },
+      conditional:   { animated: true },
+      bidirectional: { animated: true },
+    }
+    set((state) => ({
+      edges: state.edges.map((e) =>
+        e.id === edgeId
+          ? { ...e, type: newType, animated: meta[newType]?.animated ?? true }
+          : e
+      ),
+    }))
+  },
 
   updateNodeConfig: (nodeId, updates) =>
     set((state) => ({
