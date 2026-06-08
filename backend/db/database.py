@@ -35,6 +35,22 @@ class Experiment(Base):
     created_at    = Column(DateTime, default=datetime.utcnow)
 
 
+class AnalysisJob(Base):
+    """Tracks every data-analysis run end-to-end."""
+    __tablename__ = "analysis_jobs"
+    id               = Column(String, primary_key=True)
+    filename         = Column(String, nullable=False)
+    status           = Column(String, default="pending")  # pending|running|completed|failed|partial
+    profile_json     = Column(Text)   # dataset shape, dtypes, nulls
+    stats_json       = Column(Text)   # descriptive stats, correlations
+    insights_text    = Column(Text)   # LLM narrative
+    chart_paths_json = Column(Text)   # list of chart titles
+    report_md        = Column(Text)   # full markdown report
+    error_text       = Column(Text)
+    latency_ms       = Column(Float)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
 
