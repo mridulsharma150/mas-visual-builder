@@ -71,21 +71,22 @@ def cleaning_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # 1. Drop fully duplicate rows
     df.drop_duplicates(inplace=True)
 
-    # 2. Numeric imputation — median
+    # 2. Numeric imputation — median (pandas 3.0-safe pattern)
     num_cols = df.select_dtypes(include="number").columns.tolist()
     for col in num_cols:
-        df[col].fillna(df[col].median(), inplace=True)
+        df[col] = df[col].fillna(df[col].median())
 
-    # 3. Categorical imputation — mode
+    # 3. Categorical imputation — mode (pandas 3.0-safe pattern)
     cat_cols = df.select_dtypes(include="object").columns.tolist()
     for col in cat_cols:
         mode_val = df[col].mode()
-        df[col].fillna(mode_val[0] if len(mode_val) else "Unknown", inplace=True)
+        df[col] = df[col].fillna(mode_val[0] if len(mode_val) else "Unknown")
 
     # 4. Auto-parse date-like string columns (>70% parseable)
+    #    infer_datetime_format removed — deprecated since pandas 2.0
     for col in cat_cols:
         try:
-            parsed = pd.to_datetime(df[col], infer_datetime_format=True, errors="coerce")
+            parsed = pd.to_datetime(df[col], errors="coerce")
             if parsed.notna().sum() / max(len(df), 1) > 0.7:
                 df[col] = parsed
         except Exception:
@@ -124,9 +125,10 @@ def analysis_node(state: Dict[str, Any]) -> Dict[str, Any]:
     num_df = df.select_dtypes(include="number")
     cat_df = df.select_dtypes(include="object")
 
-    desc      = num_df.describe().round(4).to_dict()
-    skewness  = num_df.skew().round(4).to_dict()
-    kurtosis  = num_df.kurt().round(4).to_dict()
+    # BUG1 FIX: Guard against empty numeric DataFrame (categorical-only datasets)
+    desc     = num_df.describe().round(4).to_dict() if not num_df.empty else {}
+    skewness = num_df.skew().round(4).to_dict()     if not num_df.empty else {}
+    kurtosis = num_df.kurt().round(4).to_dict()     if not num_df.empty else {}
 
     corr_matrix      = {}
     top_correlations = []
@@ -409,7 +411,7 @@ def visualization_node(state: Dict[str, Any]) -> Dict[str, Any]:
 # ─────────────────────────────────────────────
 def report_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Assemble a comprehensive Markdown report from all prior nodes."""
-    from datetime import datetime
+    from datetime import datetime, timezone
     from jinja2 import Template
 
     REPORT_TMPL = """# \U0001f4ca Data Analysis Report \u2014 {{ filename }}
@@ -484,7 +486,7 @@ Chart types produced:
 
     report = Template(REPORT_TMPL).render(
         filename=state.get("filename", "dataset"),
-        ts=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        ts=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         rows=profile.get("shape", [0, 0])[0],
         cols=profile.get("shape", [0, 0])[1],
         memory_kb=profile.get("memory_kb", "N/A"),
